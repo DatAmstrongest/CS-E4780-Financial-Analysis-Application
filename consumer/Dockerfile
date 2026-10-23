@@ -24,6 +24,9 @@ RUN wget -q -P /opt/flink/lib/ \
   "https://repo.maven.apache.org/maven2/org/apache/flink/flink-connector-jdbc/${JDBC_CONNECTOR_VERSION}/flink-connector-jdbc-${JDBC_CONNECTOR_VERSION}.jar" \
   "https://repo.maven.apache.org/maven2/org/postgresql/postgresql/${POSTGRES_DRIVER_VERSION}/postgresql-${POSTGRES_DRIVER_VERSION}.jar"
 
+# A named volume mounted here inherits this ownership, so the flink user can write checkpoints.
+RUN mkdir -p /opt/flink/checkpoints && chown flink:flink /opt/flink/checkpoints
+
 COPY jdbc_compat.py flink_job_ema.py flink_job_price.py flink_job_same_window.py flink_job_topic_read.py /opt/
 
 CMD ["jobmanager"]

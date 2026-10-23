@@ -238,18 +238,25 @@ services:
     ports:
       - "8081:8081"
     command: jobmanager
+    volumes:
+      - flink-checkpoints:/opt/flink/checkpoints
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8081/overview"]
       interval: 5s
       timeout: 5s
       retries: 20
 
+  # Task managers write checkpoint state and the job manager writes the checkpoint metadata,
+  # so both need the same checkpoint directory.
   taskmanager:
     <<: *flink-common
     depends_on:
       jobmanager:
         condition: service_healthy
     command: taskmanager
+    volumes:
+      - flink-checkpoints:/opt/flink/checkpoints
+    restart: on-failure
     scale: 1
 
   job-submitter:
@@ -290,3 +297,6 @@ services:
       # Default admin credentials (for admin access if needed)
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
+
+volumes:
+  flink-checkpoints:

@@ -18,6 +18,7 @@ conf = {
 
 DATE_TIME_FORMAT = "%H:%M:%S.%f" 
 BATCH_SIZE = int(os.environ["BATCH_SIZE"])
+EPOCH = datetime.datetime(1970, 1, 1)
 
 delivered = 0
 failed = 0
@@ -32,10 +33,10 @@ def on_delivery(err, msg):
         delivered += 1
 
 
-def produce(topic, key, value):
+def produce(topic, key, value, timestamp=0):
     while True:
         try:
-            producer.produce(topic, key=key, value=value, on_delivery=on_delivery)
+            producer.produce(topic, key=key, value=value, timestamp=timestamp, on_delivery=on_delivery)
             break
         except BufferError:
             # Local queue is full; serve delivery callbacks to free space and retry.
@@ -48,6 +49,11 @@ def is_positive_number(value):
         return float(value) > 0
     except ValueError:
         return False
+
+
+def event_time_ms(trading_date, trading_time):
+    traded_at = datetime.datetime.strptime(f"{trading_date} {trading_time}", "%d-%m-%Y %H:%M:%S.%f")
+    return (traded_at - EPOCH) // datetime.timedelta(milliseconds=1)
 
 
 def send_error(stock_id, reason):
@@ -108,7 +114,9 @@ try:
                     current_date = current_datetime.strftime("%d/%m/%Y")
 
                     value = {"ID": stock_id, "SecType": sec_type, "Last": last, "Trading time": trading_time, "trading_date": trading_date, "current_time": current_time, "current_date": current_date}
-                    produce("stocks", stock_id, json.dumps(value).encode('utf-8'))
+                    # The trade time becomes the Kafka record timestamp, so the Flink Kafka source can
+                    # track event time per partition (see consumer/flink_job_same_window.py).
+                    produce("stocks", stock_id, json.dumps(value).encode('utf-8'), event_time_ms(trading_date, trading_time))
                     data_counter += 1
                 if data_counter%BATCH_SIZE==0:
                     time.sleep(1)

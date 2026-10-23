@@ -79,6 +79,27 @@ psql -U postgres -d stocksdb
 select AVG(latency_end - latency_start)  from breakouts;
 ```
 
+3) Failure Recovery Test
+
+The Flink job keeps the EMAs and the open windows in Flink keyed state and checkpoints it, together with the Kafka offsets, every 30 seconds to the `flink-checkpoints` volume.
+
+3.1) While the producer is running, kill the task manager, wait a bit, and start it again:
+```
+docker kill cs-e4780-financial-analysis-application-taskmanager-1
+docker start cs-e4780-financial-analysis-application-taskmanager-1
+```
+The job restarts by itself (exponential backoff, no attempt limit) from the latest checkpoint; the Flink UI shows it under Checkpoints > Overview > Latest Restore.
+
+3.2) Run the accuracy test above; the EMAs after the crash still match the reference. Inserts use `ON CONFLICT DO NOTHING`, so rows replayed since the last checkpoint are not duplicated.
+
+3.3) If the job itself has failed or was cancelled, resubmit it from its last retained checkpoint:
+```
+docker compose run --rm --no-deps --entrypoint /opt/flink/bin/flink job-submitter run -d -m jobmanager:8081 \
+  -s file:///opt/flink/checkpoints/<job id>/chk-<n> -pyfs /opt/jdbc_compat.py -py /opt/flink_job_same_window.py
+```
+
+Ticks that arrive after their window has closed are counted (`late_ticks` metric) and written to the `late-ticks` Kafka topic; breakouts are also published to the `breakouts` topic.
+
 ----------------------------------------------------------------
 
 PROJECT DOCUMENTS

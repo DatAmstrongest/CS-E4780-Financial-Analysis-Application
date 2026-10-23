@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 import psycopg2
 
 WINDOW = timedelta(minutes=5)
-OUT_OF_ORDERNESS = timedelta(seconds=100)
+OUT_OF_ORDERNESS = timedelta(seconds=5)
 DATA_PATH = "../producer/data"
 BREAKOUT_PATH = "./actual/breakout.csv"
 EMA_PATH = "./actual/ema.csv"
