@@ -208,6 +208,8 @@ services:
      depends_on:
        timescaledb:
          condition: service_healthy
+       redis:
+         condition: service_started
      environment:
        - DB_HOST=timescaledb
        - DB_PORT=5432
@@ -273,7 +275,6 @@ services:
       - "3000:3000"
     volumes:
       - ./frontend/provisioning:/etc/grafana/provisioning
-      - ./frontend/Financial Data Analysis.json:/etc/grafana/provisioning/dashboards/dashboard.json
     environment:
       - GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource
       - GF_DATE_FORMATS_FULL_DATE=YYYY-MM-DD HH:mm:ss.SSS
