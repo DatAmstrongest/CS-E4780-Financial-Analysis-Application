@@ -43,6 +43,13 @@ def produce(topic, key, value):
     producer.poll(0)
 
 
+def is_positive_number(value):
+    try:
+        return float(value) > 0
+    except ValueError:
+        return False
+
+
 def send_error(stock_id, reason):
     value = f"{datetime.datetime.now()}: {reason}"
     produce("error", stock_id, value.encode("utf-8"))
@@ -87,6 +94,10 @@ try:
                     send_error(stock_id, "SecType cannot be null")
                 elif last == '':
                     send_error(stock_id, "Last cannot be null")
+                elif not is_positive_number(last):
+                    # The CSVs contain "no trade yet" placeholder rows with Last=0 at 00:00:00;
+                    # treating them as trades drags the EMAs towards 0.
+                    send_error(stock_id, f"Last must be a positive number, got {last}")
                 elif trading_time == '':
                     send_error(stock_id, "Trading time cannot be null")
                 elif trading_date == '':

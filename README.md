@@ -50,18 +50,19 @@ HOW TO TEST THE PROJECT?
 
 1) Accuracy Test
 
-1.1) Run the following Python file to calculate breakouts:
+1.1) Run the following Python file to get the EMAs and breakouts from the system:
 ```
-cd /accuracy-testing
-python3 actual_ema_breakout_collector.py
-```
-
-1.2) Run the following Python file to get the breakouts from the system:
-```
+cd accuracy-testing
+pip install -r requirements.txt
 python3 system_ema_breakout_collector.py
 ```
 
-1.3) Run the following Python file to compare the actual breakouts and the system breakouts:
+1.2) Run the following Python file to calculate the reference EMAs and breakouts. If the system has only replayed part of the data, pass `--until` with a trading time it has already passed:
+```
+python3 actual_ema_breakout_calculator.py --until "2021-11-08 15:30"
+```
+
+1.3) Run the following Python file to compare them. It only compares windows both sides have fully processed, and by default leaves out each stock's first-window bull breakout (both EMAs start at 0); add `--include-initial` to score those too:
 ```
 python3 accuracy_checker.py
 ```
