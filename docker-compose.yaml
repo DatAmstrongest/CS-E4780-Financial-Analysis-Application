@@ -1,4 +1,14 @@
-version: '2'
+x-flink-common: &flink-common
+  build: ./consumer
+  image: cs-e4780-flink:1.20.5
+  environment:
+    FLINK_PROPERTIES: |
+      jobmanager.rpc.address: jobmanager
+      jobmanager.memory.process.size: 1024m
+      taskmanager.memory.process.size: 2048m
+      taskmanager.numberOfTaskSlots: 4
+      taskmanager.registration.timeout: 100000
+      heartbeat.timeout: 100000
 
 services:
   kafka1:
@@ -211,39 +221,41 @@ services:
      command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   jobmanager:
-    image: flink:1.20-scala_2.12
-    build: ./consumer
+    <<: *flink-common
     hostname: "jobmanager"
     expose:
       - "6123"
     ports:
       - "8081:8081"
-    command: jobmanager 
-    volumes:
-      - ./consumer/flink_job_ema.py:/opt/flink_job_ema.py  
-      - ./consumer/flink_job_ema.py:/opt/flink_job_price.py
-      - ./consumer/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml
+    command: jobmanager
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/overview"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   taskmanager:
-    image: flink:1.20-scala_2.12
+    <<: *flink-common
     depends_on:
-      - jobmanager
+      jobmanager:
+        condition: service_healthy
     command: taskmanager
     scale: 1
-    volumes:
-      - ./consumer/flink_job_ema.py:/opt/flink_job_ema.py
-      - ./consumer/flink_job_ema.py:/opt/flink_job_price.py
-      - ./consumer/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml
 
   job-submitter:
-    image: flink:1.20-scala_2.12
+    <<: *flink-common
     depends_on:
-      kafka1:
-        condition: service_healthy
+      kafka-init-topics:
+        condition: service_completed_successfully
+      python-db-helper:
+        condition: service_completed_successfully
       jobmanager:
+        condition: service_healthy
+      taskmanager:
         condition: service_started
     volumes:
       - ./consumer/submit_job.sh:/opt/submit_job.sh
+      - ./consumer/jdbc_compat.py:/opt/jdbc_compat.py
       - ./consumer/flink_job_ema.py:/opt/flink_job_ema.py
       - ./consumer/flink_job_price.py:/opt/flink_job_price.py
       - ./consumer/flink_job_topic_read.py:/opt/flink_job_topic_read.py

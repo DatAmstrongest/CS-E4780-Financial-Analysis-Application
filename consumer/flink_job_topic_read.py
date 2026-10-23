@@ -1,11 +1,11 @@
 import logging
 import json
 import psycopg2
-from pyflink.datastream import StreamExecutionEnvironment, TimeCharacteristic
+from pyflink.datastream import StreamExecutionEnvironment
 from pyflink.datastream.functions import ProcessWindowFunction
 from pyflink.datastream.window import TumblingProcessingTimeWindows, TumblingEventTimeWindows
 from pyflink.common import Time, Types, Row, WatermarkStrategy, Duration
-from pyflink.datastream.connectors import FlinkKafkaConsumer
+from pyflink.datastream.connectors.kafka import KafkaSource, KafkaOffsetsInitializer, KafkaOffsetResetStrategy
 from pyflink.datastream.connectors.jdbc import JdbcSink, JdbcConnectionOptions, JdbcExecutionOptions
 from pyflink.common.serialization import SimpleStringSchema
 from pyflink.common.watermark_strategy import TimestampAssigner
@@ -85,19 +85,17 @@ def process_kafka_stream():
     # Set up Flink environment
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_parallelism(1)
-    env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
 
-    # Configure Kafka consumer
-    properties = {
-        'bootstrap.servers': 'kafka3:9092',
-        'group.id': 'flink-consumer'
-    }
-    kafka_consumer = FlinkKafkaConsumer(
-        topics='stocks',
-        deserialization_schema=SimpleStringSchema(),
-        properties=properties
-    )
-    stream = env.add_source(kafka_consumer)
+    # Configure Kafka source
+    kafka_source = KafkaSource.builder() \
+        .set_bootstrap_servers('kafka3:9092') \
+        .set_topics('stocks') \
+        .set_group_id('flink-consumer') \
+        .set_starting_offsets(KafkaOffsetsInitializer.committed_offsets(KafkaOffsetResetStrategy.EARLIEST)) \
+        .set_value_only_deserializer(SimpleStringSchema()) \
+        .set_property('enable.auto.commit', 'true') \
+        .build()
+    stream = env.from_source(kafka_source, WatermarkStrategy.no_watermarks(), 'Kafka Source')
     # Process the data and log it to TaskManager
     stream.map(lambda msg: json.loads(msg)) \
          .map(lambda msg: logger.info(f"Received message: {msg}")) \

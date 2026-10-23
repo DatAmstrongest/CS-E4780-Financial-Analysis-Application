@@ -1,12 +1,13 @@
 import logging
 import json
 import psycopg2
-from pyflink.datastream import StreamExecutionEnvironment, TimeCharacteristic
+from pyflink.datastream import StreamExecutionEnvironment
 from pyflink.datastream.functions import ProcessWindowFunction
 from pyflink.datastream.window import TumblingProcessingTimeWindows, TumblingEventTimeWindows
 from pyflink.common import Time, Types, Row, WatermarkStrategy, Duration
-from pyflink.datastream.connectors import FlinkKafkaConsumer
-from pyflink.datastream.connectors.jdbc import JdbcSink, JdbcConnectionOptions, JdbcExecutionOptions
+from pyflink.datastream.connectors.kafka import KafkaSource, KafkaOffsetsInitializer, KafkaOffsetResetStrategy
+from pyflink.datastream.connectors.jdbc import JdbcConnectionOptions, JdbcExecutionOptions
+from jdbc_compat import row_jdbc_sink
 from pyflink.common.serialization import SimpleStringSchema
 from pyflink.common.watermark_strategy import TimestampAssigner
 from typing import Tuple, Iterable, Dict
@@ -136,19 +137,18 @@ def process_kafka_stream():
     # Set up Flink environment
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_parallelism(2)
-    env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
-    
-    properties = {
-        'bootstrap.servers': 'kafka1:9092',
-        'group.id': 'flink-consumer'
-    }
-    kafka_consumer = FlinkKafkaConsumer(
-        topics='stocks',
-        deserialization_schema=SimpleStringSchema(),
-        properties=properties
-    )
+
+    kafka_source = KafkaSource.builder() \
+        .set_bootstrap_servers('kafka1:9092') \
+        .set_topics('stocks') \
+        .set_group_id('flink-consumer') \
+        .set_starting_offsets(KafkaOffsetsInitializer.committed_offsets(KafkaOffsetResetStrategy.EARLIEST)) \
+        .set_value_only_deserializer(SimpleStringSchema()) \
+        .set_property('enable.auto.commit', 'true') \
+        .build()
     # Add Kafka source to the environment and assign timestamps and watermarks
-    stream = env.add_source(kafka_consumer).map(lambda msg: json.loads(msg))
+    stream = env.from_source(kafka_source, WatermarkStrategy.no_watermarks(), 'Kafka Source') \
+        .map(lambda msg: json.loads(msg))
     stream = stream.assign_timestamps_and_watermarks(
         WatermarkStrategy
         .for_bounded_out_of_orderness(Duration.of_seconds(10))
@@ -170,7 +170,7 @@ def process_kafka_stream():
     processed_stream = processed_stream.map(lambda r: r, output_type=type_info)
 
     processed_stream.add_sink(
-        JdbcSink.sink(
+        row_jdbc_sink(
             "INSERT INTO ema (stock_id, dt, prev_ema38, prev_ema100, ema38, ema100, latency_start) VALUES (?::int, ?::timestamp, ?::double precision, ?::double precision, ?::double precision, ?::double precision, ?::timestamp)",
             type_info,
             JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
