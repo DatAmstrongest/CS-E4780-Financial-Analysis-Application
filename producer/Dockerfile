@@ -2,6 +2,8 @@
 FROM python:3.9
 
 WORKDIR /app
+# Print progress lines immediately so they show up in `docker logs`.
+ENV PYTHONUNBUFFERED=1
 
 # Install required packages
 COPY requirements.txt .
