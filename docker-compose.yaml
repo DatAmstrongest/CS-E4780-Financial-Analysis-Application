@@ -9,6 +9,8 @@ x-flink-common: &flink-common
       taskmanager.numberOfTaskSlots: 4
       taskmanager.registration.timeout: 100000
       heartbeat.timeout: 100000
+      metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+      metrics.reporter.prom.port: 9249
 
 services:
   kafka1:
@@ -356,7 +358,74 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - vector-data:/var/lib/vector
 
+  # Monitoring: exporters -> Prometheus (http://localhost:9090) -> Alertmanager (http://localhost:19093)
+  # -> email. SMTP settings come from .env (see .env.example); otherwise mail lands in Mailpit.
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.external-url=http://localhost:9090
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - prometheus-data:/prometheus
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    entrypoint: ["sh", "/alertmanager.sh"]
+    command: ["--web.external-url=http://localhost:19093"]
+    environment:
+      SMTP_SMARTHOST: ${SMTP_SMARTHOST:-mailpit:1025}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-false}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-alertmanager@financial-analysis.local}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-team@financial-analysis.local}
+    ports:
+      - "19093:9093"
+    volumes:
+      - ./monitoring/alertmanager.sh:/alertmanager.sh:ro
+      - alertmanager-data:/alertmanager
+
+  mailpit:
+    image: axllent/mailpit:v1.20
+    ports:
+      - "8025:8025"
+
+  docker-exporter:
+    build: ./monitoring/docker-exporter
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # Mounting / gives the Docker Desktop VM's root filesystem, where the Docker disk is mounted.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command: ["--path.rootfs=/host"]
+    volumes:
+      - /:/host:ro
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.8.0
+    command:
+      - --kafka.server=kafka1:9092
+      - --kafka.server=kafka2:9092
+      - --kafka.server=kafka3:9092
+      - --kafka.server=kafka4:9092
+      - --kafka.server=kafka5:9092
+    # Exits when no broker is reachable at startup.
+    restart: unless-stopped
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://postgres:password@timescaledb:5432/stocksdb?sslmode=disable
+
 volumes:
   flink-checkpoints:
   es-data:
   vector-data:
+  prometheus-data:
+  alertmanager-data:

@@ -20,6 +20,7 @@ for _, row in stocks_data.iterrows():
     cursor.execute("""
             INSERT INTO stock (symbol, security_type)
             VALUES (%s, %s)
+            ON CONFLICT (symbol) DO NOTHING
             """, (row['ID'], row['SecType']))
 
 connection.commit()

@@ -2,4 +2,5 @@
 .DS_Store
 data/
 *.swp
+.env
 !python-db-helper/stocks.csv

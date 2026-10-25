@@ -1,0 +1,196 @@
+groups:
+  - name: containers
+    rules:
+      - alert: ContainerDown
+        expr: docker_container_running{service!~"kafka-init-topics|python-db-helper|job-submitter|logging-setup-.*"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} is not running"
+          description: "Container {{ $labels.container }} has been stopped for more than 1 minute."
+
+      - alert: SetupContainerFailed
+        expr: |
+          docker_container_running{service=~"kafka-init-topics|python-db-helper|job-submitter|logging-setup-.*"} == 0
+          and docker_container_exit_code != 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} failed"
+          description: "One-shot container {{ $labels.container }} exited with code {{ $value }}."
+
+      - alert: ContainerUnhealthy
+        expr: docker_container_healthy == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} health check is failing"
+          description: "Container {{ $labels.container }} has been unhealthy for 3 minutes."
+
+      - alert: ContainerRestarting
+        expr: changes(docker_container_started_at_seconds{service!~"kafka-init-topics|python-db-helper|job-submitter|logging-setup-.*"}[15m]) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} keeps restarting"
+          description: "Container {{ $labels.container }} restarted {{ $value }} times in 15 minutes."
+
+      - alert: ContainerOutOfMemory
+        expr: docker_container_oom_killed == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} was killed for running out of memory"
+          description: "Container {{ $labels.container }} was OOM-killed."
+
+      - alert: ContainerHighCpu
+        expr: rate(docker_container_cpu_seconds_total[5m]) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} uses a lot of CPU"
+          description: "Container {{ $labels.container }} has used {{ $value | printf \"%.1f\" }} CPU cores for 10 minutes."
+
+  - name: host
+    rules:
+      - alert: HostHighCpu
+        expr: 1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          service: docker-host
+        annotations:
+          summary: "Docker host CPU usage is high"
+          description: "CPU usage has been {{ $value | humanizePercentage }} for 10 minutes."
+
+      - alert: HostLowMemory
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: docker-host
+        annotations:
+          summary: "Docker host is running out of memory"
+          description: "Only {{ $value | humanizePercentage }} of the memory is available."
+
+      - alert: DockerDiskSpaceLow
+        expr: node_filesystem_avail_bytes{mountpoint="/var/lib/docker"} / node_filesystem_size_bytes{mountpoint="/var/lib/docker"} < 0.15
+        for: 5m
+        labels:
+          severity: warning
+          service: docker-host
+        annotations:
+          summary: "Docker disk is almost full"
+          description: "Only {{ $value | humanizePercentage }} of the Docker disk (volumes, images, logs) is free."
+
+      - alert: DockerDiskSpaceCritical
+        expr: node_filesystem_avail_bytes{mountpoint="/var/lib/docker"} / node_filesystem_size_bytes{mountpoint="/var/lib/docker"} < 0.05
+        for: 1m
+        labels:
+          severity: critical
+          service: docker-host
+        annotations:
+          summary: "Docker disk is full"
+          description: "Only {{ $value | humanizePercentage }} of the Docker disk is free; Kafka, TimescaleDB and Elasticsearch will start failing."
+
+      - alert: DockerDiskFillingUp
+        expr: predict_linear(node_filesystem_avail_bytes{mountpoint="/var/lib/docker"}[1h], 6 * 3600) < 0
+        for: 15m
+        labels:
+          severity: warning
+          service: docker-host
+        annotations:
+          summary: "Docker disk will be full within 6 hours"
+          description: "At the current rate of the last hour the Docker disk runs out of space within 6 hours."
+
+  - name: pipeline
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} metrics endpoint {{ $labels.instance }} is down"
+          description: "Prometheus could not scrape {{ $labels.instance }} for 2 minutes."
+
+      - alert: KafkaBrokerDown
+        expr: kafka_brokers < 5
+        for: 1m
+        labels:
+          severity: critical
+          service: kafka
+        annotations:
+          summary: "Kafka broker down"
+          description: "Only {{ $value }} of 5 Kafka brokers are in the cluster."
+
+      - alert: KafkaUnderReplicatedPartitions
+        expr: sum(kafka_topic_partition_under_replicated_partition) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: kafka
+        annotations:
+          summary: "Kafka partitions are under-replicated"
+          description: "{{ $value }} partitions have fewer in-sync replicas than configured."
+
+      - alert: FlinkConsumerLagHigh
+        expr: sum(kafka_consumergroup_lag{consumergroup="flink-consumer"}) > 200000
+        for: 10m
+        labels:
+          severity: warning
+          service: taskmanager
+        annotations:
+          summary: "Flink is falling behind Kafka"
+          description: "The Flink consumer group is {{ $value }} records behind the stocks topic."
+
+      - alert: FlinkJobNotRunning
+        expr: flink_jobmanager_numRunningJobs < 1
+        for: 3m
+        labels:
+          severity: critical
+          service: jobmanager
+        annotations:
+          summary: "No Flink job is running"
+          description: "The EMA breakout job is not running; no EMAs or breakouts are being computed."
+
+      - alert: FlinkNoTaskManager
+        expr: flink_jobmanager_numRegisteredTaskManagers < 1
+        for: 1m
+        labels:
+          severity: critical
+          service: taskmanager
+        annotations:
+          summary: "No Flink task manager is registered"
+          description: "The Flink job has no task manager to run on."
+
+      - alert: FlinkJobRestarted
+        expr: increase(flink_jobmanager_job_numRestarts[5m]) > 0
+        labels:
+          severity: warning
+          service: jobmanager
+        annotations:
+          summary: "Flink job restarted"
+          description: "Job {{ $labels.job_name }} restarted from its last checkpoint."
+
+      - alert: FlinkCheckpointsFailing
+        expr: increase(flink_jobmanager_job_numberOfFailedCheckpoints[10m]) > 0
+        labels:
+          severity: warning
+          service: jobmanager
+        annotations:
+          summary: "Flink checkpoints are failing"
+          description: "{{ $value }} checkpoints of job {{ $labels.job_name }} failed in the last 10 minutes."
+
+      - alert: TimescaleDBDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: timescaledb
+        annotations:
+          summary: "TimescaleDB is down"
+          description: "The postgres exporter cannot connect to TimescaleDB."

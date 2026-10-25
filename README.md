@@ -57,6 +57,25 @@ The "Container logs" data view holds these logs; filter with e.g. `component : "
 
 The "Rejected rows" data view holds a live sample (up to 2000 rows/s) of the `rejected-rows` Kafka topic, filterable by `reason`, `symbol` and `file`. Container logs are kept for 3 days and rejected rows for about 10 minutes (`logging/setup.sh`).
 
+11) Prometheus collects metrics and Alertmanager emails an alert when something breaks:
+
+- Prometheus (metrics, alert states): http://localhost:9090/alerts
+- Alertmanager (active and silenced alerts): http://localhost:19093/
+- Mailpit (local inbox for the alert emails): http://localhost:8025/
+
+To receive the emails in a real mailbox, copy `.env.example` to `.env`, fill in your SMTP settings (for Gmail an app password), and run `docker compose up -d alertmanager`. `.env` is git-ignored.
+
+The rules are in `monitoring/alert-rules.yml`:
+- Components: a container stopped (`ContainerDown`), a setup container failed, a failing health check, restart loops, out-of-memory kills, a Kafka broker missing, under-replicated partitions, no running Flink job or task manager, Flink restarts or failed checkpoints, Flink falling behind Kafka, TimescaleDB unreachable, any metrics endpoint down.
+- Resources: Docker host CPU above 90% or available memory below 10% (for 10/5 minutes), a container using more than 3 CPU cores, Docker disk below 15%/5% free or predicted to be full within 6 hours.
+
+Metrics come from `monitoring/docker-exporter` (state, CPU and memory of every container, labelled by compose service), node-exporter (Docker host), kafka-exporter, postgres-exporter and Flink's built-in Prometheus reporter. Prometheus is also added as a Grafana data source. To try it out, take a component down with:
+```
+monitoring/trigger-alert.sh kafka3          # or taskmanager, timescaledb, redis, fastapi, ...
+monitoring/trigger-alert.sh kafka3 --kill   # SIGKILL (a crash) instead of a graceful stop
+```
+It stops the service, waits until its alerts fire in Alertmanager (about 1.5 minutes; for kafka3 `ContainerDown` and `KafkaBrokerDown`) and the email arrives in Mailpit, then starts it again and waits until the alerts resolve. Add `--keep-down` to leave it down.
+
 ----------------------------------------------------------------
 
 HOW TO TEST THE PROJECT?
