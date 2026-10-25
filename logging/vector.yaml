@@ -1,0 +1,135 @@
+# Collects the output of every container (via the Docker API) and the rejected-rows Kafka topic,
+# tags each event and ships it to Elasticsearch. Browse the results in Kibana (http://localhost:5601).
+data_dir: /var/lib/vector
+
+sources:
+  containers:
+    type: docker_logs
+    # Java stack traces: continuation lines start with whitespace or "Caused by:".
+    multiline:
+      start_pattern: '^[^\s]'
+      mode: continue_through
+      condition_pattern: '^[\s]+|^Caused by:'
+      timeout_ms: 1000
+
+  rejected_rows:
+    type: kafka
+    bootstrap_servers: kafka1:9092,kafka2:9092,kafka3:9092,kafka4:9092,kafka5:9092
+    group_id: vector-rejected-rows
+    topics: [rejected-rows]
+    # Show what is being rejected now; older rows are only kept by Kafka for a short time anyway.
+    auto_offset_reset: latest
+    decoding:
+      codec: json
+
+transforms:
+  tag_containers:
+    type: remap
+    inputs: [containers]
+    source: |
+      service = string(.label."com.docker.compose.service") ?? string!(.container_name)
+      .service = service
+      .container = .container_name
+      .container_id = slice!(string!(.container_id), 0, 12)
+      .component = if starts_with(service, "kafka") {
+        "kafka"
+      } else if includes(["jobmanager", "taskmanager", "job-submitter"], service) {
+        "flink"
+      } else if service == "timescaledb" {
+        "timescaledb"
+      } else if includes(["producer", "fastapi", "python-db-helper"], service) {
+        "application"
+      } else if includes(["grafana", "redis"], service) {
+        service
+      } else if includes(["elasticsearch", "kibana", "vector", "logging-setup-es", "logging-setup-kibana"], service) {
+        "logging"
+      } else {
+        "other"
+      }
+
+      # Each component formats its level differently (Kafka "[..] INFO", Flink ", INFO",
+      # Postgres "LOG:"/"ERROR:", Grafana "level=info", uvicorn "INFO:"); take the first level word.
+      head = truncate(string!(.message), 200)
+      parsed, err = parse_regex(head, r'(?i)\b(?P<level>trace|debug|info|notice|warn|warning|error|eror|severe|fatal|critical|panic|log)\b')
+      level = if err == null { downcase(string!(parsed.level)) } else { "info" }
+      .level = if level == "warning" {
+        "warn"
+      } else if includes(["eror", "severe"], level) {
+        "error"
+      } else if includes(["log", "notice"], level) {
+        "info"
+      } else if includes(["critical", "panic"], level) {
+        "fatal"
+      } else {
+        level
+      }
+
+      if service == "producer" {
+        progress, err = parse_json(string!(.message))
+        if err == null && is_object(progress) {
+          .producer = progress
+        }
+      }
+
+      ."@timestamp" = del(.timestamp)
+      del(.label)
+      del(.container_name)
+      del(.container_created_at)
+      del(.source_type)
+      del(.host)
+
+  # The producer rejects ~20k rows/s, more than a single local Elasticsearch node can index next to
+  # the pipeline. Keep a live sample; exact per-reason counts are in the producer's progress logs.
+  sample_rejected_rows:
+    type: throttle
+    inputs: [rejected_rows]
+    threshold: 2000
+    window_secs: 1
+
+  tag_rejected_rows:
+    type: remap
+    inputs: [sample_rejected_rows]
+    source: |
+      .component = "application"
+      .service = "producer"
+      .kafka = {"topic": .topic, "partition": .partition, "offset": .offset}
+      ."@timestamp" = del(.timestamp)
+      del(.topic)
+      del(.partition)
+      del(.offset)
+      del(.message_key)
+      del(.headers)
+      del(.source_type)
+
+sinks:
+  elasticsearch_containers:
+    type: elasticsearch
+    inputs: [tag_containers]
+    endpoints: [http://elasticsearch:9200]
+    api_version: v8
+    mode: data_stream
+    data_stream:
+      type: logs
+      dataset: containers
+      namespace: default
+      auto_routing: false
+      sync_fields: false
+    # Container logs are only read once from Docker, so they are buffered on disk while
+    # Elasticsearch is starting or unavailable.
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+
+  elasticsearch_rejected_rows:
+    type: elasticsearch
+    inputs: [tag_rejected_rows]
+    endpoints: [http://elasticsearch:9200]
+    api_version: v8
+    mode: data_stream
+    data_stream:
+      type: logs
+      dataset: rejected_rows
+      namespace: default
+      auto_routing: false
+      sync_fields: false

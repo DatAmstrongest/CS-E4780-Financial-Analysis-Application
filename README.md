@@ -44,6 +44,19 @@ password: admin
 
 http://localhost:8081/
 
+10) The logs of all containers are collected in Elasticsearch and can be searched in Kibana (Analytics > Discover):
+
+http://localhost:5601/
+
+Vector (`logging/vector.yaml`) reads every container's output through the Docker API and tags each line with:
+- `component`: `kafka`, `flink`, `timescaledb`, `application` (producer, fastapi, python-db-helper), `grafana`, `redis` or `logging`
+- `service`: the docker compose service, e.g. `kafka3`, `taskmanager`, `producer`
+- `level`: `debug`, `info`, `warn`, `error` or `fatal`, taken from each component's own log format
+
+The "Container logs" data view holds these logs; filter with e.g. `component : "flink" and level : ("warn" or "error")`. The producer's progress lines are also parsed into `producer.*` fields (row counts per reason, delivered, failed).
+
+The "Rejected rows" data view holds a live sample (up to 2000 rows/s) of the `rejected-rows` Kafka topic, filterable by `reason`, `symbol` and `file`. Container logs are kept for 3 days and rejected rows for about 10 minutes (`logging/setup.sh`).
+
 ----------------------------------------------------------------
 
 HOW TO TEST THE PROJECT?
